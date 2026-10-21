@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>NaviRoute GPS - Navigasi Pintar</title>
+  <title>Jalan-Jalan - InsyaAllah Sampai</title>
 
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -23,7 +23,6 @@
       padding: 0;
       overflow: hidden;
     }
-    /* Animasi denyutan marker */
     .pulse-ring {
       border: 3px solid #2563eb;
       border-radius: 50%;
@@ -67,7 +66,13 @@
     </div>
   </div>
 
-  <!-- 2. PANEL INPUT & CARIAN (Sebelum Navigasi) -->
+  <!-- 2. BUTANG RE-CENTER (Muncul semasa peta dileret keluar dari fokus kenderaan) -->
+  <button id="btn-recenter" onclick="recenterMap()" class="hidden absolute bottom-28 right-4 z-[1050] bg-white text-blue-600 p-3.5 rounded-full shadow-2xl border border-slate-200 active:scale-90 transition-all flex items-center gap-2 font-bold text-xs">
+    <i data-lucide="locate" class="w-5 h-5 text-blue-600"></i>
+    <span class="pr-1 text-slate-800">Center Semula</span>
+  </button>
+
+  <!-- 3. PANEL INPUT & CARIAN (Sebelum Navigasi) -->
   <div id="search-panel" class="absolute top-4 left-4 right-4 md:left-6 md:w-96 z-[1000] flex flex-col gap-2">
     <div class="p-4 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200">
       
@@ -77,7 +82,7 @@
             <i data-lucide="navigation" class="w-5 h-5"></i>
           </div>
           <div>
-            <h1 class="font-bold text-sm text-slate-900">NaviRoute GPS</h1>
+            <h1 class="font-bold text-sm text-slate-900">Jalan-Jalan</h1>
             <p class="text-[10px] text-slate-500">Panduan Masa Nyata</p>
           </div>
         </div>
@@ -129,7 +134,7 @@
     </div>
   </div>
 
-  <!-- 3. PANEL BAWAH (Ringkasan & Mula Bergerak) -->
+  <!-- 4. PANEL BAWAH (Ringkasan & Butang Navigasi) -->
   <div id="bottom-panel" class="absolute bottom-6 left-4 right-4 md:left-6 md:w-96 z-[1000] hidden">
     <div class="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-slate-200">
       <div class="flex items-center justify-between mb-3">
@@ -143,13 +148,13 @@
         </div>
       </div>
 
-      <!-- Pilihan Jenis Pergerakan -->
+      <!-- Pilihan Mod Bergerak -->
       <div id="nav-actions" class="grid grid-cols-2 gap-2">
         <button onclick="startNavigation('simulation')" class="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow">
           <i data-lucide="play" class="w-4 h-4 fill-white"></i> Simulasi Kereta
         </button>
         <button onclick="startNavigation('realtime')" class="w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow">
-          <i data-lucide="navigation" class="w-4 h-4 fill-white"></i> Pandu Sebenar (GPS)
+          <i data-lucide="navigation" class="w-4 h-4 fill-white"></i> Jom Bergerak
         </button>
       </div>
 
@@ -177,15 +182,49 @@
     let transportMode = 'driving';
     let pinTarget = null;
 
-    // Data Perjalanan
+    // Data Perjalanan & Navigasi
     let routeCoords = [];
     let routeSteps = [];
     let vehicleMarker = null;
+    let currentVehicleLatLng = null;
+    let currentBearing = 0;
     let simTimer = null;
     let watchId = null;
+    let isNavigating = false;
     let voiceEnabled = true;
 
-    // Klik Peta
+    // Tetapan Auto-Center
+    let isAutoCenter = true;
+
+    // Kesan sentuhan atau leretan jari pengguna di atas peta
+    map.on('dragstart', () => {
+      if (isNavigating) {
+        isAutoCenter = false;
+        showRecenterButton(true);
+      }
+    });
+
+    function showRecenterButton(show) {
+      const btn = document.getElementById('btn-recenter');
+      if (show) {
+        btn.classList.remove('hidden');
+        btn.classList.add('flex');
+      } else {
+        btn.classList.add('hidden');
+        btn.classList.remove('flex');
+      }
+    }
+
+    // Fungsi Pusat Semula (Re-center)
+    function recenterMap() {
+      isAutoCenter = true;
+      showRecenterButton(false);
+      if (currentVehicleLatLng) {
+        map.flyTo(currentVehicleLatLng, 17, { animate: true, duration: 0.8 });
+      }
+    }
+
+    // Klik Peta untuk Tetapkan Pin
     map.on('click', (e) => {
       if (!pinTarget) return;
       const { lat, lng } = e.latlng;
@@ -320,17 +359,15 @@
         }
 
         const route = json.routes[0];
-        // Leaflet perlukan format [lat, lon]
         routeCoords = route.geometry.coordinates.map(c => [c[1], c[0]]);
 
-        // Ekstrak Langkah-Langkah Panduan
         routeSteps = [];
         route.legs.forEach(leg => {
           leg.steps.forEach(st => {
             routeSteps.push({
               instruction: st.maneuver.instruction || (st.maneuver.type + ' ' + (st.maneuver.modifier || '')),
               distance: st.distance,
-              location: [st.maneuver.location[1], st.maneuver.location[0]], // [lat, lon]
+              location: [st.maneuver.location[1], st.maneuver.location[0]],
               modifier: st.maneuver.modifier || 'straight'
             });
           });
@@ -340,7 +377,6 @@
         routeLayer = L.polyline(routeCoords, { color: '#2563eb', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
         map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
 
-        // Kemaskini Panel Bawah
         const mins = Math.round(route.duration / 60);
         const km = (route.distance / 1000).toFixed(1);
         document.getElementById('route-duration').textContent = `${mins} minit`;
@@ -357,7 +393,7 @@
       }
     }
 
-    // Kira Sudut Arah (Heading / Bearing) antara 2 koordinat
+    // Kira Bearing Sudut Arah
     function calculateBearing(lat1, lon1, lat2, lon2) {
       const toRad = deg => (deg * Math.PI) / 180;
       const toDeg = rad => (rad * 180) / Math.PI;
@@ -370,8 +406,11 @@
       return (brng + 360) % 360;
     }
 
-    // Cipta Simbol Kenderaan / Anak Panah Navigasi
+    // Cipta atau Kemas kini Marker Kenderaan
     function updateVehicleMarker(lat, lon, angle = 0) {
+      currentVehicleLatLng = [lat, lon];
+      currentBearing = angle;
+
       if (!vehicleMarker) {
         const carIcon = L.divIcon({
           className: 'custom-vehicle-icon',
@@ -396,13 +435,21 @@
           carEl.style.transform = `rotate(${angle}deg)`;
         }
       }
+
+      // Hanya bawa kamera jika isAutoCenter masih aktif
+      if (isAutoCenter) {
+        map.panTo([lat, lon], { animate: true, duration: 0.5 });
+      }
     }
 
-    // Mula Navigasi (Pilihan 'simulation' atau 'realtime')
+    // Mula Navigasi
     function startNavigation(type) {
       if (routeCoords.length === 0) return;
 
-      // Sembunyikan panel carian, buka HUD panduan atas
+      isNavigating = true;
+      isAutoCenter = true;
+      showRecenterButton(false);
+
       document.getElementById('search-panel').classList.add('hidden');
       document.getElementById('nav-actions').classList.add('hidden');
       document.getElementById('btn-stop-nav').classList.remove('hidden');
@@ -420,7 +467,7 @@
       }
     }
 
-    // Mod 1: Simulasi Pergerakan Kereta di atas Laluan
+    // Simulasi Pergerakan Kereta
     function runSimulation() {
       let index = 0;
       let currentStepIdx = 0;
@@ -429,7 +476,7 @@
         if (index >= routeCoords.length - 1) {
           clearInterval(simTimer);
           speakVoice('Anda telah sampai ke destinasi.');
-          updateHUD('Sampai ke Destinasi', '0 m', 'check');
+          updateHUD('Sampai ke Destinasi', '0 m');
           return;
         }
 
@@ -438,13 +485,11 @@
         const bearing = calculateBearing(curr[0], curr[1], next[0], next[1]);
 
         updateVehicleMarker(curr[0], curr[1], bearing);
-        map.panTo(curr, { animate: true, duration: 0.6 });
 
-        // Semak langkah arahan seterusnya
         if (routeSteps[currentStepIdx]) {
           const step = routeSteps[currentStepIdx];
-          updateHUD(step.instruction, `${Math.round(step.distance)} m`, step.modifier);
-          if (index % 5 === 0 && voiceEnabled) {
+          updateHUD(step.instruction, `${Math.round(step.distance)} m`);
+          if (index % 6 === 0 && voiceEnabled) {
             speakVoice(step.instruction);
           }
           if (index > (currentStepIdx + 1) * (routeCoords.length / routeSteps.length)) {
@@ -456,7 +501,7 @@
       }, 700);
     }
 
-    // Mod 2: Real-time GPS Tracker
+    // Penjejakan GPS Masa Nyata
     function runRealtimeGPS() {
       if (!navigator.geolocation) {
         showError('Peranti tidak menyokong penjejakan GPS.');
@@ -465,9 +510,8 @@
 
       watchId = navigator.geolocation.watchPosition((pos) => {
         const { latitude, longitude, heading } = pos.coords;
-        const angle = heading || 0;
+        const angle = heading || currentBearing;
         updateVehicleMarker(latitude, longitude, angle);
-        map.panTo([latitude, longitude], { animate: true, duration: 1 });
       }, (err) => {
         console.error(err);
       }, {
@@ -477,8 +521,12 @@
       });
     }
 
-    // Henti Navigasi
+    // Tamatkan Navigasi
     function stopNavigation() {
+      isNavigating = false;
+      isAutoCenter = true;
+      showRecenterButton(false);
+
       if (simTimer) clearInterval(simTimer);
       if (watchId) navigator.geolocation.clearWatch(watchId);
 
@@ -496,7 +544,7 @@
       if (routeLayer) map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
     }
 
-    function updateHUD(instruction, distText, modifier) {
+    function updateHUD(instruction, distText) {
       document.getElementById('hud-instruction').textContent = instruction;
       document.getElementById('hud-distance').textContent = distText;
     }
