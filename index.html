@@ -1,0 +1,855 @@
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Navigation,
+  MapPin,
+  Search,
+  Compass,
+  Volume2,
+  VolumeX,
+  Play,
+  Square,
+  Car,
+  Footprints,
+  Bike,
+  Layers,
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  X,
+  LocateFixed,
+  RotateCcw,
+  Clock,
+  Milestone,
+  AlertCircle,
+  History,
+  ArrowUp,
+  ArrowRight,
+  ArrowLeft,
+  CornerUpLeft,
+  CornerUpRight
+} from 'lucide-react';
+
+export default function App() {
+  // --- Leaflet & Map States ---
+  const mapContainerRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const routeLayerRef = useRef(null);
+  const startMarkerRef = useRef(null);
+  const destMarkerRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const simIntervalRef = useRef(null);
+
+  // --- App State ---
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [tileMode, setTileMode] = useState('light'); // 'light' | 'dark' | 'satellite'
+  const [transportMode, setTransportMode] = useState('driving'); // 'driving' | 'walking' | 'cycling'
+  
+  // Coordinates [lat, lng]
+  const [origin, setOrigin] = useState(null);
+  const [destination, setDestination] = useState(null);
+  const [originQuery, setOriginQuery] = useState('');
+  const [destQuery, setDestQuery] = useState('');
+  const [originSuggestions, setOriginSuggestions] = useState([]);
+  const [destSuggestions, setDestSuggestions] = useState([]);
+  const [isSearchingOrigin, setIsSearchingOrigin] = useState(false);
+  const [isSearchingDest, setIsSearchingDest] = useState(false);
+  const [pinMode, setPinMode] = useState(null); // 'origin' | 'dest' | null
+
+  // Route Data
+  const [routeData, setRouteData] = useState(null);
+  const [routeSteps, setRouteSteps] = useState([]);
+  const [isCalculating, setIsCalculating] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
+  // Navigation Mode
+  const [isNavigating, setIsNavigating] = useState(false);
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [currentSpeed, setCurrentSpeed] = useState(42); // simulated km/h
+  const [userLocation, setUserLocation] = useState(null);
+  const [watchId, setWatchId] = useState(null);
+  const [showDirectionsDrawer, setShowDirectionsDrawer] = useState(false);
+
+  // Recent searches stored in state
+  const [recentDestinations, setRecentDestinations] = useState([
+    { name: 'Kuala Lumpur City Centre (KLCC)', lat: 3.1578, lon: 101.7118 },
+    { name: 'National Museum of Malaysia', lat: 3.1376, lon: 101.6888 },
+    { name: 'Bukit Bintang, KL', lat: 3.1466, lon: 101.7112 },
+  ]);
+
+  // --- Load Leaflet Dynamically ---
+  useEffect(() => {
+    // Inject Leaflet CSS
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+
+    // Inject Leaflet JS
+    if (!window.L) {
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.async = true;
+      script.onload = () => initMap();
+      document.body.appendChild(script);
+    } else {
+      initMap();
+    }
+
+    return () => {
+      if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+    };
+  }, []);
+
+  // --- Initialize Map ---
+  const initMap = () => {
+    if (!mapContainerRef.current || mapInstanceRef.current) return;
+    const L = window.L;
+
+    // Default center: Kuala Lumpur (3.1390, 101.6869)
+    const map = L.map(mapContainerRef.current, {
+      zoomControl: false,
+    }).setView([3.1390, 101.6869], 13);
+
+    // Zoom control in bottom right
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // Initial base layer
+    const baseTile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors',
+    }).addTo(map);
+
+    mapInstanceRef.current = map;
+    mapInstanceRef.current._baseTile = baseTile;
+    setMapLoaded(true);
+
+    // Map Click Handler for setting pin directly
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      window.dispatchEvent(new CustomEvent('map-clicked', { detail: { lat, lng } }));
+    });
+  };
+
+  // Handle map click events based on pinMode
+  useEffect(() => {
+    const handleMapClick = (e) => {
+      const { lat, lng } = e.detail;
+      if (pinMode === 'origin') {
+        updateOrigin({ lat, lon: lng, display_name: `Pin: ${lat.toFixed(4)}, ${lng.toFixed(4)}` });
+        setPinMode(null);
+      } else if (pinMode === 'dest') {
+        updateDestination({ lat, lon: lng, display_name: `Pin: ${lat.toFixed(4)}, ${lng.toFixed(4)}` });
+        setPinMode(null);
+      }
+    };
+    window.addEventListener('map-clicked', handleMapClick);
+    return () => window.removeEventListener('map-clicked', handleMapClick);
+  }, [pinMode]);
+
+  // Update Tile Layer
+  useEffect(() => {
+    if (!mapInstanceRef.current || !window.L) return;
+    const L = window.L;
+    const map = mapInstanceRef.current;
+
+    if (map._baseTile) {
+      map.removeLayer(map._baseTile);
+    }
+
+    let url = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+    if (tileMode === 'dark') {
+      url = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    } else if (tileMode === 'satellite') {
+      url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    }
+
+    map._baseTile = L.tileLayer(url, {
+      maxZoom: 19,
+      attribution: 'Map data &copy; OpenStreetMap/CartoDB/Esri',
+    }).addTo(map);
+  }, [tileMode]);
+
+  // --- Voice Synthesis helper ---
+  const speakText = (text) => {
+    if (!voiceEnabled || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // --- Get User Current Location ---
+  const handleGetCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setErrorMessage('Geolocation tidak disokong oleh pelayar anda.');
+      return;
+    }
+
+    setErrorMessage('');
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const coords = { lat: latitude, lon: longitude, display_name: 'Lokasi Semasa Saya' };
+        updateOrigin(coords);
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.flyTo([latitude, longitude], 15);
+        }
+      },
+      (err) => {
+        setErrorMessage('Gagal mendapatkan lokasi: Sila benarkan akses GPS.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  // --- Search Geocoding via Nominatim API ---
+  const searchAddress = async (query, isOrigin) => {
+    if (!query || query.trim().length < 2) return;
+    if (isOrigin) setIsSearchingOrigin(true);
+    else setIsSearchingDest(true);
+
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`
+      );
+      const data = await resp.json();
+      if (isOrigin) {
+        setOriginSuggestions(data);
+      } else {
+        setDestSuggestions(data);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      if (isOrigin) setIsSearchingOrigin(false);
+      else setIsSearchingDest(false);
+    }
+  };
+
+  // Set Origin
+  const updateOrigin = (loc) => {
+    setOrigin(loc);
+    setOriginQuery(loc.display_name);
+    setOriginSuggestions([]);
+
+    if (!mapInstanceRef.current || !window.L) return;
+    const L = window.L;
+
+    if (startMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(startMarkerRef.current);
+    }
+
+    // Custom Origin Icon (Green Pin)
+    const icon = L.divIcon({
+      className: 'custom-div-icon',
+      html: `<div style="background-color: #10B981; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"><div style="background: white; width: 8px; height: 8px; border-radius: 50%;"></div></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+
+    startMarkerRef.current = L.marker([loc.lat, loc.lon], { icon })
+      .addTo(mapInstanceRef.current)
+      .bindPopup(`<b>Mula:</b> ${loc.display_name.slice(0, 40)}...`);
+  };
+
+  // Set Destination
+  const updateDestination = (loc) => {
+    setDestination(loc);
+    setDestQuery(loc.display_name);
+    setDestSuggestions([]);
+
+    // Save to recents
+    if (!recentDestinations.some((item) => item.name === loc.display_name)) {
+      setRecentDestinations((prev) => [{ name: loc.display_name, lat: loc.lat, lon: loc.lon }, ...prev.slice(0, 4)]);
+    }
+
+    if (!mapInstanceRef.current || !window.L) return;
+    const L = window.L;
+
+    if (destMarkerRef.current) {
+      mapInstanceRef.current.removeLayer(destMarkerRef.current);
+    }
+
+    // Custom Destination Icon (Red Pin)
+    const icon = L.divIcon({
+      className: 'custom-div-icon',
+      html: `<div style="background-color: #EF4444; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 3px solid white; box-shadow: 0 4px 6px rgba(0,0,0,0.3);"><div style="background: white; width: 8px; height: 8px; border-radius: 50%;"></div></div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+
+    destMarkerRef.current = L.marker([loc.lat, loc.lon], { icon })
+      .addTo(mapInstanceRef.current)
+      .bindPopup(`<b>Destinasi:</b> ${loc.display_name.slice(0, 40)}...`);
+  };
+
+  // --- Calculate Route using OSRM API ---
+  const calculateRoute = async () => {
+    if (!origin || !destination) {
+      setErrorMessage('Sila pilih lokasi mula dan destinasi terlebih dahulu.');
+      return;
+    }
+    setErrorMessage('');
+    setIsCalculating(true);
+
+    try {
+      // Map transport mode to OSRM profile
+      const profile = transportMode === 'walking' ? 'foot' : transportMode === 'cycling' ? 'bike' : 'driving';
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${origin.lon},${origin.lat};${destination.lon},${destination.lat}?overview=full&geometries=geojson&steps=true`;
+
+      const res = await fetch(url);
+      const json = await res.json();
+
+      if (json.code !== 'Ok' || !json.routes || json.routes.length === 0) {
+        setErrorMessage('Tiada laluan dijumpai untuk titik yang dipilih.');
+        setIsCalculating(false);
+        return;
+      }
+
+      const route = json.routes[0];
+      setRouteData(route);
+
+      // Extract detailed steps
+      const steps = [];
+      route.legs.forEach((leg) => {
+        leg.steps.forEach((step) => {
+          steps.push({
+            instruction: step.maneuver.instruction || (step.maneuver.type + ' ' + (step.maneuver.modifier || '')),
+            modifier: step.maneuver.modifier || 'straight',
+            type: step.maneuver.type,
+            distance: step.distance,
+            duration: step.duration,
+            name: step.name || 'Jalan',
+            location: step.maneuver.location, // [lon, lat]
+          });
+        });
+      });
+      setRouteSteps(steps);
+
+      // Render polyline on Leaflet
+      drawRoutePolyline(route.geometry.coordinates);
+      setShowDirectionsDrawer(true);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage('Ralat sambungan ke pelayan perutean OSRM.');
+    } finally {
+      setIsCalculating(false);
+    }
+  };
+
+  // Draw GeoJSON coordinates to Leaflet Polyline
+  const drawRoutePolyline = (coords) => {
+    if (!mapInstanceRef.current || !window.L) return;
+    const L = window.L;
+    const map = mapInstanceRef.current;
+
+    if (routeLayerRef.current) {
+      map.removeLayer(routeLayerRef.current);
+    }
+
+    // Coords from GeoJSON is [lon, lat] -> Leaflet needs [lat, lon]
+    const latlngs = coords.map((c) => [c[1], c[0]]);
+
+    // Outer glow + Inner primary color
+    const glow = L.polyline(latlngs, {
+      color: '#3B82F6',
+      weight: 8,
+      opacity: 0.5,
+      lineCap: 'round',
+    });
+
+    const line = L.polyline(latlngs, {
+      color: '#1D4ED8',
+      weight: 5,
+      opacity: 0.9,
+      lineCap: 'round',
+      lineJoin: 'round',
+    });
+
+    routeLayerRef.current = L.featureGroup([glow, line]).addTo(map);
+
+    // Fit map bounds to show complete route
+    map.fitBounds(line.getBounds(), { padding: [50, 50] });
+  };
+
+  // --- Navigation Simulation / Live Mode ---
+  const startNavigation = () => {
+    if (!routeSteps.length || !routeData) return;
+    setIsNavigating(true);
+    setCurrentStepIndex(0);
+    setShowDirectionsDrawer(false);
+
+    speakText(`Navigasi dimulakan. ${routeSteps[0]?.instruction || 'Jalan lurus'}`);
+
+    // Simulation: Move user marker along each step
+    let stepIdx = 0;
+    if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+
+    simIntervalRef.current = setInterval(() => {
+      if (stepIdx >= routeSteps.length) {
+        clearInterval(simIntervalRef.current);
+        speakText('Anda telah sampai ke destinasi anda.');
+        setIsNavigating(false);
+        return;
+      }
+
+      const step = routeSteps[stepIdx];
+      const targetLatLng = [step.location[1], step.location[0]];
+
+      updateUserNavigationMarker(targetLatLng);
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.panTo(targetLatLng, { animate: true, duration: 1 });
+      }
+
+      setCurrentStepIndex(stepIdx);
+      if (stepIdx > 0 && voiceEnabled) {
+        speakText(step.instruction);
+      }
+
+      stepIdx++;
+    }, 4500);
+  };
+
+  const stopNavigation = () => {
+    if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+    setIsNavigating(false);
+    if (userMarkerRef.current && mapInstanceRef.current) {
+      mapInstanceRef.current.removeLayer(userMarkerRef.current);
+      userMarkerRef.current = null;
+    }
+  };
+
+  const updateUserNavigationMarker = (latlng) => {
+    if (!mapInstanceRef.current || !window.L) return;
+    const L = window.L;
+    const map = mapInstanceRef.current;
+
+    if (!userMarkerRef.current) {
+      const navIcon = L.divIcon({
+        className: 'user-nav-icon',
+        html: `
+          <div style="position: relative; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;">
+            <div style="position: absolute; width: 36px; height: 36px; background: rgba(59, 130, 246, 0.35); border-radius: 50%; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+            <div style="width: 22px; height: 22px; background: #2563EB; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 0 10px rgba(0,0,0,0.4);"></div>
+          </div>
+        `,
+        iconSize: [36, 36],
+        iconAnchor: [18, 18],
+      });
+      userMarkerRef.current = L.marker(latlng, { icon: navIcon }).addTo(map);
+    } else {
+      userMarkerRef.current.setLatLng(latlng);
+    }
+  };
+
+  // Helper formatters
+  const formatDistance = (meters) => {
+    if (!meters && meters !== 0) return '0 m';
+    if (meters >= 1000) return `${(meters / 1000).toFixed(1)} km`;
+    return `${Math.round(meters)} m`;
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds && seconds !== 0) return '0 min';
+    const mins = Math.round(seconds / 60);
+    if (mins >= 60) {
+      const hrs = Math.floor(mins / 60);
+      const remainMins = mins % 60;
+      return `${hrs} jam ${remainMins} min`;
+    }
+    return `${mins} min`;
+  };
+
+  const getManeuverIcon = (modifier) => {
+    switch (modifier) {
+      case 'right':
+      case 'sharp right':
+        return <CornerUpRight className="w-8 h-8 text-white" />;
+      case 'left':
+      case 'sharp left':
+        return <CornerUpLeft className="w-8 h-8 text-white" />;
+      case 'slight right':
+        return <ArrowRight className="w-8 h-8 text-white rotate-[-30deg]" />;
+      case 'slight left':
+        return <ArrowLeft className="w-8 h-8 text-white rotate-[30deg]" />;
+      default:
+        return <ArrowUp className="w-8 h-8 text-white" />;
+    }
+  };
+
+  return (
+    <div className="relative w-full h-screen overflow-hidden bg-slate-900 font-sans text-slate-800">
+      {/* 1. MAP CONTAINER */}
+      <div ref={mapContainerRef} className="w-full h-full z-0" />
+
+      {/* 2. TOP FLOATING SEARCH / NAVIGATION PANEL */}
+      {!isNavigating ? (
+        <div className="absolute top-4 left-4 right-4 md:left-6 md:w-96 z-20 flex flex-col gap-2">
+          {/* Main Search Box */}
+          <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-xl p-4 border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-blue-600 rounded-xl text-white shadow-md shadow-blue-500/30">
+                  <Navigation className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="text-base font-bold text-slate-900 leading-none">NaviRoute GPS</h1>
+                  <span className="text-[11px] text-slate-500 font-medium">Laluan OSRM & OpenStreetMap</span>
+                </div>
+              </div>
+
+              {/* Mode switch (Driving / Cycling / Walking) */}
+              <div className="flex bg-slate-100 p-1 rounded-xl">
+                <button
+                  onClick={() => setTransportMode('driving')}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    transportMode === 'driving' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  title="Kereta"
+                >
+                  <Car className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setTransportMode('cycling')}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    transportMode === 'cycling' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  title="Basikal"
+                >
+                  <Bike className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setTransportMode('walking')}
+                  className={`p-1.5 rounded-lg transition-all ${
+                    transportMode === 'walking' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                  title="Pejalan Kaki"
+                >
+                  <Footprints className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Inputs: Origin & Destination */}
+            <div className="mt-3 flex flex-col gap-2 relative">
+              {/* Origin Input */}
+              <div className="relative flex items-center">
+                <div className="w-3 h-3 rounded-full bg-emerald-500 mr-2.5 ml-1 ring-4 ring-emerald-100" />
+                <input
+                  type="text"
+                  placeholder="Lokasi berlepas (atau guna GPS)"
+                  value={originQuery}
+                  onChange={(e) => {
+                    setOriginQuery(e.target.value);
+                    searchAddress(e.target.value, true);
+                  }}
+                  className="w-full text-xs md:text-sm bg-slate-50 hover:bg-slate-100/80 focus:bg-white text-slate-900 rounded-xl px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all pr-14"
+                />
+                <button
+                  onClick={handleGetCurrentLocation}
+                  className="absolute right-7 text-slate-400 hover:text-blue-600 p-1"
+                  title="Gunakan lokasi saya sekarang"
+                >
+                  <LocateFixed className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setPinMode(pinMode === 'origin' ? null : 'origin')}
+                  className={`absolute right-1 p-1 ${pinMode === 'origin' ? 'text-emerald-600 font-bold' : 'text-slate-400 hover:text-emerald-600'}`}
+                  title="Klik peta untuk pin mula"
+                >
+                  <MapPin className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Origin Suggestions Dropdown */}
+              {originSuggestions.length > 0 && (
+                <div className="absolute top-10 left-0 right-0 bg-white shadow-2xl rounded-xl z-30 max-h-48 overflow-y-auto border border-slate-200">
+                  {originSuggestions.map((item, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => updateOrigin(item)}
+                      className="px-3 py-2 text-xs hover:bg-blue-50 cursor-pointer border-b border-slate-100 text-slate-700 truncate"
+                    >
+                      {item.display_name}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Destination Input */}
+              <div className="relative flex items-center">
+                <div className="w-3 h-3 rounded-full bg-rose-500 mr-2.5 ml-1 ring-4 ring-rose-100" />
+                <input
+                  type="text"
+                  placeholder="Destinasi tujuan..."
+                  value={destQuery}
+                  onChange={(e) => {
+                    setDestQuery(e.target.value);
+                    searchAddress(e.target.value, false);
+                  }}
+                  className="w-full text-xs md:text-sm bg-slate-50 hover:bg-slate-100/80 focus:bg-white text-slate-900 rounded-xl px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all pr-8"
+                />
+                <button
+                  onClick={() => setPinMode(pinMode === 'dest' ? null : 'dest')}
+                  className={`absolute right-1 p-1 ${pinMode === 'dest' ? 'text-rose-600 font-bold' : 'text-slate-400 hover:text-rose-600'}`}
+                  title="Klik peta untuk pin destinasi"
+                >
+                  <MapPin className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Destination Suggestions Dropdown */}
+              {destSuggestions.length > 0 && (
+                <div className="absolute top-20 left-0 right-0 bg-white shadow-2xl rounded-xl z-30 max-h-48 overflow-y-auto border border-slate-200">
+                  {destSuggestions.map((item, idx) => (
+                    <div
+                      key={idx}
+                      onClick={() => updateDestination(item)}
+                      className="px-3 py-2 text-xs hover:bg-blue-50 cursor-pointer border-b border-slate-100 text-slate-700 truncate"
+                    >
+                      {item.display_name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {pinMode && (
+              <div className="mt-2 text-[11px] bg-amber-50 text-amber-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-amber-200">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>Klik di mana-mana tempat atas peta untuk set <b>{pinMode === 'origin' ? 'Mula' : 'Destinasi'}</b></span>
+              </div>
+            )}
+
+            {/* Error Message */}
+            {errorMessage && (
+              <div className="mt-2 text-xs bg-rose-50 text-rose-600 px-3 py-1.5 rounded-lg flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={calculateRoute}
+                disabled={isCalculating}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white py-2.5 rounded-xl text-xs md:text-sm font-semibold flex items-center justify-center gap-2 shadow-lg shadow-blue-500/25 transition-all disabled:opacity-50"
+              >
+                {isCalculating ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Compass className="w-4 h-4" />
+                    <span>Cari Laluan</span>
+                  </>
+                )}
+              </button>
+
+              {routeData && (
+                <button
+                  onClick={startNavigation}
+                  className="bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white px-4 py-2.5 rounded-xl text-xs md:text-sm font-semibold flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/25 transition-all"
+                >
+                  <Play className="w-4 h-4 fill-white" />
+                  <span>Mula</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Recents / Suggestions Pill List */}
+          {!routeData && (
+            <div className="bg-white/90 backdrop-blur-md rounded-2xl p-3 shadow-md border border-slate-200/80">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                <History className="w-3.5 h-3.5" />
+                <span>Destinasi Popular / Terkini</span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {recentDestinations.slice(0, 3).map((item, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => {
+                      updateDestination({ lat: item.lat, lon: item.lon, display_name: item.name });
+                    }}
+                    className="text-left text-xs text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg truncate flex items-center gap-2 transition"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                    <span className="truncate">{item.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* 3. ACTIVE TURN-BY-TURN NAVIGATION HUD (TOP BANNER) */
+        <div className="absolute top-4 left-4 right-4 md:left-1/2 md:-translate-x-1/2 md:w-[480px] z-30">
+          <div className="bg-slate-900/95 backdrop-blur-md text-white rounded-3xl shadow-2xl p-4 border border-slate-700 flex items-center justify-between">
+            <div className="flex items-center gap-3.5">
+              <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center shadow-lg shadow-blue-500/40">
+                {getManeuverIcon(routeSteps[currentStepIndex]?.modifier)}
+              </div>
+              <div>
+                <div className="text-emerald-400 text-xs font-bold uppercase tracking-wider">
+                  {formatDistance(routeSteps[currentStepIndex]?.distance)}
+                </div>
+                <div className="text-base font-bold leading-snug line-clamp-2">
+                  {routeSteps[currentStepIndex]?.instruction || 'Teruskan di laluan anda'}
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  Menuju ke <span className="text-slate-200">{routeSteps[currentStepIndex]?.name || 'Jalan Utama'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Voice and Exit HUD Buttons */}
+            <div className="flex flex-col items-center gap-2 pl-3 border-l border-slate-700">
+              <button
+                onClick={() => setVoiceEnabled(!voiceEnabled)}
+                className={`p-2 rounded-xl transition ${voiceEnabled ? 'bg-slate-800 text-blue-400' : 'bg-slate-800 text-slate-500'}`}
+                title="Suara Panduan"
+              >
+                {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+              </button>
+              <button
+                onClick={stopNavigation}
+                className="p-2 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white transition shadow-md shadow-rose-600/30"
+                title="Hentikan Navigasi"
+              >
+                <Square className="w-5 h-5 fill-white" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. MAP UTILITY CONTROLS (Right Side) */}
+      <div className="absolute right-4 top-20 md:top-6 z-20 flex flex-col gap-2">
+        {/* Layer style toggle */}
+        <button
+          onClick={() => {
+            if (tileMode === 'light') setTileMode('dark');
+            else if (tileMode === 'dark') setTileMode('satellite');
+            else setTileMode('light');
+          }}
+          className="bg-white/90 backdrop-blur-md hover:bg-white text-slate-700 p-2.5 rounded-2xl shadow-lg border border-slate-200 transition active:scale-95 flex flex-col items-center text-[10px] font-semibold"
+          title="Tukar Mod Peta (Terang / Gelap / Satelit)"
+        >
+          <Layers className="w-5 h-5 text-blue-600" />
+          <span className="capitalize mt-0.5">{tileMode}</span>
+        </button>
+
+        {/* Locate User Button */}
+        <button
+          onClick={handleGetCurrentLocation}
+          className="bg-white/90 backdrop-blur-md hover:bg-white text-slate-700 p-2.5 rounded-2xl shadow-lg border border-slate-200 transition active:scale-95"
+          title="Fokus ke Lokasi Saya"
+        >
+          <LocateFixed className="w-5 h-5 text-emerald-600" />
+        </button>
+      </div>
+
+      {/* 5. BOTTOM ROUTE SUMMARY / NAVIGATION STATUS BAR */}
+      {routeData && (
+        <div className="absolute bottom-4 left-4 right-4 md:left-1/2 md:-translate-x-1/2 md:w-[480px] z-20">
+          <div className="bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl p-4 border border-slate-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-slate-900">
+                    {formatDuration(routeData.duration)}
+                  </span>
+                  <span className="text-sm font-semibold text-slate-500">
+                    ({formatDistance(routeData.distance)})
+                  </span>
+                </div>
+                <div className="text-xs font-medium text-slate-500 flex items-center gap-1.5 mt-0.5">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  <span>
+                    Tiba sekitar{' '}
+                    {new Date(Date.now() + routeData.duration * 1000).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                  {isNavigating && (
+                    <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full text-[10px] font-bold ml-1">
+                      {currentSpeed} km/j
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowDirectionsDrawer(!showDirectionsDrawer)}
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3.5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-1 transition"
+                >
+                  <span>Arahan</span>
+                  {showDirectionsDrawer ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+                </button>
+
+                {!isNavigating ? (
+                  <button
+                    onClick={startNavigation}
+                    className="bg-blue-600 hover:bg-blue-700 active:scale-95 text-white px-5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-blue-500/30 transition"
+                  >
+                    <Play className="w-4 h-4 fill-white" />
+                    <span>Mula GPS</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={stopNavigation}
+                    className="bg-rose-600 hover:bg-rose-700 active:scale-95 text-white px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-rose-600/30 transition"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-white" />
+                    <span>Tamat</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Collapsible Directions List Drawer */}
+            {showDirectionsDrawer && (
+              <div className="mt-4 pt-3 border-t border-slate-100 max-h-60 overflow-y-auto pr-1">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                  Langkah Panduan ({routeSteps.length})
+                </div>
+                <div className="flex flex-col gap-2">
+                  {routeSteps.map((step, i) => (
+                    <div
+                      key={i}
+                      className={`flex items-start gap-3 p-2 rounded-xl text-xs ${
+                        i === currentStepIndex && isNavigating
+                          ? 'bg-blue-50 border border-blue-200 font-semibold text-blue-900'
+                          : 'hover:bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      <div className="p-1.5 bg-slate-200 text-slate-700 rounded-lg mt-0.5">
+                        <Milestone className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="flex-1">
+                        <div>{step.instruction}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          {formatDistance(step.distance)} • {formatDuration(step.duration)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
