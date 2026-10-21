@@ -2,8 +2,8 @@
 <html lang="ms">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NaviRoute GPS WebApp</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>NaviRoute GPS - Navigasi Pintar</title>
 
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -23,24 +23,52 @@
       padding: 0;
       overflow: hidden;
     }
-    .custom-pin {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 9999px;
-      color: white;
-      font-weight: bold;
-      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);
+    /* Animasi denyutan marker */
+    .pulse-ring {
+      border: 3px solid #2563eb;
+      border-radius: 50%;
+      height: 48px;
+      width: 48px;
+      position: absolute;
+      left: -14px;
+      top: -14px;
+      animation: pulsate 1.5s ease-out infinite;
+      opacity: 0;
+    }
+    @keyframes pulsate {
+      0% { transform: scale(0.6); opacity: 1; }
+      100% { transform: scale(1.4); opacity: 0; }
+    }
+    .car-marker-container {
+      transition: transform 0.3s linear;
     }
   </style>
 </head>
-<body class="relative font-sans antialiased text-slate-800 bg-slate-900">
+<body class="relative font-sans antialiased text-slate-900 bg-slate-950">
 
-  <!-- Peta -->
+  <!-- Peta Leaflet -->
   <div id="map"></div>
 
-  <!-- Panel Kawalan Atas -->
-  <div class="absolute top-4 left-4 right-4 md:left-6 md:w-96 z-[1000] flex flex-col gap-2">
+  <!-- 1. HUD ARAHAN ATAS (Masa Navigasi Aktif) -->
+  <div id="nav-hud" class="hidden absolute top-4 left-4 right-4 md:left-6 md:w-96 z-[1100]">
+    <div class="bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-2xl shadow-2xl border border-slate-700">
+      <div class="flex items-center gap-3">
+        <div id="hud-maneuver-icon" class="bg-blue-600 p-3 rounded-2xl text-white shadow-lg flex items-center justify-center">
+          <i data-lucide="arrow-up" class="w-7 h-7"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div id="hud-distance" class="text-xl font-black text-blue-400">0 m</div>
+          <div id="hud-instruction" class="text-sm font-semibold truncate">Teruskan di laluan anda</div>
+        </div>
+        <button onclick="toggleVoice()" id="btn-voice" class="p-2 bg-slate-800 text-blue-400 rounded-xl" title="Suara">
+          <i data-lucide="volume-2" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. PANEL INPUT & CARIAN (Sebelum Navigasi) -->
+  <div id="search-panel" class="absolute top-4 left-4 right-4 md:left-6 md:w-96 z-[1000] flex flex-col gap-2">
     <div class="p-4 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-slate-200">
       
       <div class="flex items-center justify-between mb-3">
@@ -50,34 +78,27 @@
           </div>
           <div>
             <h1 class="font-bold text-sm text-slate-900">NaviRoute GPS</h1>
-            <p class="text-[10px] text-slate-500">OSRM & OpenStreetMap</p>
+            <p class="text-[10px] text-slate-500">Panduan Masa Nyata</p>
           </div>
         </div>
 
-        <!-- Mod Kenderaan -->
         <div class="flex bg-slate-100 p-1 rounded-xl text-xs gap-1">
-          <button id="btn-car" onclick="setMode('driving')" class="p-1.5 rounded-lg bg-white shadow text-blue-600">
-            <i data-lucide="car" class="w-4 h-4"></i>
-          </button>
-          <button id="btn-bike" onclick="setMode('cycling')" class="p-1.5 rounded-lg text-slate-500 hover:text-slate-900">
-            <i data-lucide="bike" class="w-4 h-4"></i>
-          </button>
-          <button id="btn-walk" onclick="setMode('walking')" class="p-1.5 rounded-lg text-slate-500 hover:text-slate-900">
-            <i data-lucide="footprints" class="w-4 h-4"></i>
-          </button>
+          <button id="btn-car" onclick="setMode('driving')" class="p-1.5 rounded-lg bg-white shadow text-blue-600"><i data-lucide="car" class="w-4 h-4"></i></button>
+          <button id="btn-bike" onclick="setMode('cycling')" class="p-1.5 rounded-lg text-slate-500"><i data-lucide="bike" class="w-4 h-4"></i></button>
+          <button id="btn-walk" onclick="setMode('walking')" class="p-1.5 rounded-lg text-slate-500"><i data-lucide="footprints" class="w-4 h-4"></i></button>
         </div>
       </div>
 
       <!-- Input Mula & Destinasi -->
       <div class="flex flex-col gap-2 relative">
         <div class="relative">
-          <input id="input-origin" type="text" placeholder="Pilih Titik Mula atau guna GPS..."
-            class="w-full text-xs bg-slate-50 rounded-xl px-3 py-2 pr-16 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <input id="input-origin" type="text" placeholder="Titik mula atau klik GPS..."
+            class="w-full text-xs bg-slate-50 rounded-xl px-3 py-2.5 pr-16 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           <div class="absolute right-1 top-1.5 flex items-center">
-            <button onclick="getCurrentLocation()" title="Guna Lokasi GPS Semasa" class="p-1 text-blue-600 hover:bg-blue-50 rounded-md">
+            <button onclick="getCurrentLocation()" title="Guna GPS" class="p-1 text-blue-600 hover:bg-blue-50 rounded-md">
               <i data-lucide="locate-fixed" class="w-4 h-4"></i>
             </button>
-            <button onclick="setPinTarget('origin')" title="Klik peta untuk titik mula" class="p-1 text-slate-400 hover:text-emerald-600 rounded-md">
+            <button onclick="setPinTarget('origin')" title="Pin di peta" class="p-1 text-slate-400 hover:text-emerald-600 rounded-md">
               <i data-lucide="map-pin" class="w-4 h-4"></i>
             </button>
           </div>
@@ -86,9 +107,9 @@
 
         <div class="relative">
           <input id="input-dest" type="text" placeholder="Cari destinasi..."
-            class="w-full text-xs bg-slate-50 rounded-xl px-3 py-2 pr-10 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            class="w-full text-xs bg-slate-50 rounded-xl px-3 py-2.5 pr-10 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           <div class="absolute right-1 top-1.5 flex items-center">
-            <button onclick="setPinTarget('dest')" title="Klik peta untuk destinasi" class="p-1 text-slate-400 hover:text-rose-600 rounded-md">
+            <button onclick="setPinTarget('dest')" title="Pin di peta" class="p-1 text-slate-400 hover:text-rose-600 rounded-md">
               <i data-lucide="map-pin" class="w-4 h-4"></i>
             </button>
           </div>
@@ -97,11 +118,10 @@
       </div>
 
       <div id="pin-notice" class="mt-2 text-[11px] text-amber-600 font-semibold hidden">
-        Sila klik pada mana-mana kawasan di atas peta...
+        Sila klik mana-mana lokasi atas peta...
       </div>
 
-      <!-- Butang Kira Laluan -->
-      <button onclick="calculateRoute()" class="mt-3 w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs py-2.5 rounded-xl shadow transition flex items-center justify-center gap-2">
+      <button onclick="calculateRoute()" id="btn-calc" class="mt-3 w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-semibold text-xs py-2.5 rounded-xl shadow transition flex items-center justify-center gap-2">
         <i data-lucide="compass" class="w-4 h-4"></i> Cari Laluan
       </button>
 
@@ -109,27 +129,41 @@
     </div>
   </div>
 
-  <!-- Panel Status Bawah (Maklumat Laluan) -->
+  <!-- 3. PANEL BAWAH (Ringkasan & Mula Bergerak) -->
   <div id="bottom-panel" class="absolute bottom-6 left-4 right-4 md:left-6 md:w-96 z-[1000] hidden">
-    <div class="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-xl border border-slate-200">
-      <div class="flex items-center justify-between">
+    <div class="bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-slate-200">
+      <div class="flex items-center justify-between mb-3">
         <div>
-          <span id="route-duration" class="text-lg font-black text-slate-900 block">-- min</span>
+          <span id="route-duration" class="text-xl font-black text-slate-900 block">-- min</span>
           <span id="route-distance" class="text-xs text-slate-500 font-medium">-- km</span>
         </div>
-        <button onclick="startNavigation()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 shadow">
-          <i data-lucide="play" class="w-4 h-4 fill-white"></i> Mula Navigasi
+        <div class="text-right">
+          <span class="text-[10px] text-slate-400 uppercase font-bold tracking-wider block">Jangkaan Tiba</span>
+          <span id="route-eta" class="text-xs font-semibold text-slate-700">--:--</span>
+        </div>
+      </div>
+
+      <!-- Pilihan Jenis Pergerakan -->
+      <div id="nav-actions" class="grid grid-cols-2 gap-2">
+        <button onclick="startNavigation('simulation')" class="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow">
+          <i data-lucide="play" class="w-4 h-4 fill-white"></i> Simulasi Kereta
+        </button>
+        <button onclick="startNavigation('realtime')" class="w-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs py-2.5 rounded-xl flex items-center justify-center gap-1.5 shadow">
+          <i data-lucide="navigation" class="w-4 h-4 fill-white"></i> Pandu Sebenar (GPS)
         </button>
       </div>
+
+      <button id="btn-stop-nav" onclick="stopNavigation()" class="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs py-2.5 rounded-xl hidden items-center justify-center gap-2 shadow">
+        <i data-lucide="square" class="w-4 h-4 fill-white"></i> Tamatkan Navigasi
+      </button>
     </div>
   </div>
 
-  <!-- Skrip Logik Navigasi -->
   <script>
     lucide.createIcons();
 
-    // 1. Inisialisasi Peta Leaflet (Pusat default: Kuala Lumpur)
-    const map = L.map('map', { zoomControl: false }).setView([3.1390, 101.6869], 13);
+    // Inisialisasi Peta Leaflet
+    const map = L.map('map', { zoomControl: false }).setView([3.1390, 101.6869], 14);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap contributors'
@@ -143,7 +177,15 @@
     let transportMode = 'driving';
     let pinTarget = null;
 
-    // 2. Klik pada peta untuk tetapkan titik
+    // Data Perjalanan
+    let routeCoords = [];
+    let routeSteps = [];
+    let vehicleMarker = null;
+    let simTimer = null;
+    let watchId = null;
+    let voiceEnabled = true;
+
+    // Klik Peta
     map.on('click', (e) => {
       if (!pinTarget) return;
       const { lat, lng } = e.latlng;
@@ -170,9 +212,9 @@
     function setMarker(type, lat, lon, color) {
       const icon = L.divIcon({
         className: 'custom-pin',
-        html: `<div style="background-color: ${color}; width: 20px; height: 20px; border-radius: 50%; border: 2px solid white;"></div>`,
-        iconSize: [20, 20],
-        iconAnchor: [10, 10]
+        html: `<div style="background-color: ${color}; width: 18px; height: 18px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);"></div>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
       });
 
       if (type === 'origin') {
@@ -187,13 +229,12 @@
     function setMode(mode) {
       transportMode = mode;
       ['car', 'bike', 'walk'].forEach(m => {
-        document.getElementById(`btn-${m}`).className = 'p-1.5 rounded-lg text-slate-500 hover:text-slate-900';
+        document.getElementById(`btn-${m}`).className = 'p-1.5 rounded-lg text-slate-500';
       });
       const activeBtn = mode === 'driving' ? 'car' : mode === 'cycling' ? 'bike' : 'walk';
       document.getElementById(`btn-${activeBtn}`).className = 'p-1.5 rounded-lg bg-white shadow text-blue-600';
     }
 
-    // 3. Ambil Lokasi GPS Semasa Pengguna
     function getCurrentLocation() {
       if (!navigator.geolocation) {
         showError('Pelayar web tidak menyokong GPS.');
@@ -206,11 +247,11 @@
         setMarker('origin', latitude, longitude, '#10b981');
         map.flyTo([latitude, longitude], 15);
       }, () => {
-        showError('Sila berikan kebenaran GPS / Lokasi.');
+        showError('Sila berikan kebenaran GPS.');
       }, { enableHighAccuracy: true });
     }
 
-    // 4. Cari Alamat Menggunakan Nominatim API
+    // Carian Geocoding
     function setupSearch(inputId, suggestionsId, isOrigin) {
       const input = document.getElementById(inputId);
       const list = document.getElementById(suggestionsId);
@@ -253,7 +294,7 @@
     setupSearch('input-origin', 'origin-suggestions', true);
     setupSearch('input-dest', 'dest-suggestions', false);
 
-    // 5. Kira Laluan Menggunakan OSRM
+    // Kira Laluan Menggunakan OSRM
     async function calculateRoute() {
       if (!originCoords || !destCoords) {
         showError('Sila pilih titik mula dan destinasi.');
@@ -261,42 +302,218 @@
       }
       showError('');
 
+      const btn = document.getElementById('btn-calc');
+      btn.innerHTML = `<span class="animate-spin">⌛</span> Mengira Laluan...`;
+
       const profile = transportMode === 'walking' ? 'foot' : transportMode === 'cycling' ? 'bike' : 'driving';
-      const url = `https://router.project-osrm.org/route/v1/${profile}/${originCoords.lon},${originCoords.lat};${destCoords.lon},${destCoords.lat}?overview=full&geometries=geojson`;
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${originCoords.lon},${originCoords.lat};${destCoords.lon},${destCoords.lat}?overview=full&geometries=geojson&steps=true`;
 
       try {
         const res = await fetch(url);
         const json = await res.json();
+        btn.innerHTML = `<i data-lucide="compass" class="w-4 h-4"></i> Cari Laluan`;
+        lucide.createIcons();
+
         if (!json.routes || json.routes.length === 0) {
           showError('Tiada laluan dijumpai.');
           return;
         }
 
         const route = json.routes[0];
-        const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+        // Leaflet perlukan format [lat, lon]
+        routeCoords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+
+        // Ekstrak Langkah-Langkah Panduan
+        routeSteps = [];
+        route.legs.forEach(leg => {
+          leg.steps.forEach(st => {
+            routeSteps.push({
+              instruction: st.maneuver.instruction || (st.maneuver.type + ' ' + (st.maneuver.modifier || '')),
+              distance: st.distance,
+              location: [st.maneuver.location[1], st.maneuver.location[0]], // [lat, lon]
+              modifier: st.maneuver.modifier || 'straight'
+            });
+          });
+        });
 
         if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.polyline(coords, { color: '#2563eb', weight: 6, opacity: 0.8 }).addTo(map);
+        routeLayer = L.polyline(routeCoords, { color: '#2563eb', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
         map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
 
-        // Paparkan Maklumat Masa & Jarak
+        // Kemaskini Panel Bawah
         const mins = Math.round(route.duration / 60);
         const km = (route.distance / 1000).toFixed(1);
         document.getElementById('route-duration').textContent = `${mins} minit`;
         document.getElementById('route-distance').textContent = `${km} km`;
-        document.getElementById('bottom-panel').classList.remove('hidden');
+        
+        const etaDate = new Date(Date.now() + route.duration * 1000);
+        document.getElementById('route-eta').textContent = etaDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+        document.getElementById('bottom-panel').classList.remove('hidden');
       } catch (err) {
-        showError('Gagal menyambung ke pelayan laluan.');
+        btn.innerHTML = `<i data-lucide="compass" class="w-4 h-4"></i> Cari Laluan`;
+        lucide.createIcons();
+        showError('Ralat sambungan ke pelayan perutean OSRM.');
       }
     }
 
-    function startNavigation() {
-      if ('speechSynthesis' in window) {
-        const utterance = new SpeechSynthesisUtterance('Navigasi dimulakan. Teruskan perjalanan anda.');
-        utterance.lang = 'ms-MY';
-        window.speechSynthesis.speak(utterance);
+    // Kira Sudut Arah (Heading / Bearing) antara 2 koordinat
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+      const toRad = deg => (deg * Math.PI) / 180;
+      const toDeg = rad => (rad * 180) / Math.PI;
+
+      const dLon = toRad(lon2 - lon1);
+      const y = Math.sin(dLon) * Math.cos(toRad(lat2));
+      const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+                Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+      const brng = toDeg(Math.atan2(y, x));
+      return (brng + 360) % 360;
+    }
+
+    // Cipta Simbol Kenderaan / Anak Panah Navigasi
+    function updateVehicleMarker(lat, lon, angle = 0) {
+      if (!vehicleMarker) {
+        const carIcon = L.divIcon({
+          className: 'custom-vehicle-icon',
+          html: `
+            <div style="position: relative; width: 44px; height: 44px;">
+              <div class="pulse-ring"></div>
+              <div id="car-symbol" class="car-marker-container" style="transform: rotate(${angle}deg); width: 44px; height: 44px; background: #1e40af; border: 3px solid white; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; color: white;">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/>
+                </svg>
+              </div>
+            </div>
+          `,
+          iconSize: [44, 44],
+          iconAnchor: [22, 22]
+        });
+        vehicleMarker = L.marker([lat, lon], { icon: carIcon }).addTo(map);
+      } else {
+        vehicleMarker.setLatLng([lat, lon]);
+        const carEl = document.getElementById('car-symbol');
+        if (carEl) {
+          carEl.style.transform = `rotate(${angle}deg)`;
+        }
       }
+    }
+
+    // Mula Navigasi (Pilihan 'simulation' atau 'realtime')
+    function startNavigation(type) {
+      if (routeCoords.length === 0) return;
+
+      // Sembunyikan panel carian, buka HUD panduan atas
+      document.getElementById('search-panel').classList.add('hidden');
+      document.getElementById('nav-actions').classList.add('hidden');
+      document.getElementById('btn-stop-nav').classList.remove('hidden');
+      document.getElementById('btn-stop-nav').classList.add('flex');
+      document.getElementById('nav-hud').classList.remove('hidden');
+
+      speakVoice('Navigasi dimulakan. Ikuti laluan.');
+
+      map.setZoom(17);
+
+      if (type === 'simulation') {
+        runSimulation();
+      } else {
+        runRealtimeGPS();
+      }
+    }
+
+    // Mod 1: Simulasi Pergerakan Kereta di atas Laluan
+    function runSimulation() {
+      let index = 0;
+      let currentStepIdx = 0;
+
+      simTimer = setInterval(() => {
+        if (index >= routeCoords.length - 1) {
+          clearInterval(simTimer);
+          speakVoice('Anda telah sampai ke destinasi.');
+          updateHUD('Sampai ke Destinasi', '0 m', 'check');
+          return;
+        }
+
+        const curr = routeCoords[index];
+        const next = routeCoords[index + 1];
+        const bearing = calculateBearing(curr[0], curr[1], next[0], next[1]);
+
+        updateVehicleMarker(curr[0], curr[1], bearing);
+        map.panTo(curr, { animate: true, duration: 0.6 });
+
+        // Semak langkah arahan seterusnya
+        if (routeSteps[currentStepIdx]) {
+          const step = routeSteps[currentStepIdx];
+          updateHUD(step.instruction, `${Math.round(step.distance)} m`, step.modifier);
+          if (index % 5 === 0 && voiceEnabled) {
+            speakVoice(step.instruction);
+          }
+          if (index > (currentStepIdx + 1) * (routeCoords.length / routeSteps.length)) {
+            currentStepIdx++;
+          }
+        }
+
+        index++;
+      }, 700);
+    }
+
+    // Mod 2: Real-time GPS Tracker
+    function runRealtimeGPS() {
+      if (!navigator.geolocation) {
+        showError('Peranti tidak menyokong penjejakan GPS.');
+        return;
+      }
+
+      watchId = navigator.geolocation.watchPosition((pos) => {
+        const { latitude, longitude, heading } = pos.coords;
+        const angle = heading || 0;
+        updateVehicleMarker(latitude, longitude, angle);
+        map.panTo([latitude, longitude], { animate: true, duration: 1 });
+      }, (err) => {
+        console.error(err);
+      }, {
+        enableHighAccuracy: true,
+        maximumAge: 1000,
+        timeout: 5000
+      });
+    }
+
+    // Henti Navigasi
+    function stopNavigation() {
+      if (simTimer) clearInterval(simTimer);
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+
+      if (vehicleMarker) {
+        map.removeLayer(vehicleMarker);
+        vehicleMarker = null;
+      }
+
+      document.getElementById('nav-hud').classList.add('hidden');
+      document.getElementById('search-panel').classList.remove('hidden');
+      document.getElementById('nav-actions').classList.remove('hidden');
+      document.getElementById('btn-stop-nav').classList.add('hidden');
+      document.getElementById('btn-stop-nav').classList.remove('flex');
+
+      if (routeLayer) map.fitBounds(routeLayer.getBounds(), { padding: [50, 50] });
+    }
+
+    function updateHUD(instruction, distText, modifier) {
+      document.getElementById('hud-instruction').textContent = instruction;
+      document.getElementById('hud-distance').textContent = distText;
+    }
+
+    function toggleVoice() {
+      voiceEnabled = !voiceEnabled;
+      const btn = document.getElementById('btn-voice');
+      btn.className = voiceEnabled ? 'p-2 bg-slate-800 text-blue-400 rounded-xl' : 'p-2 bg-slate-800 text-slate-500 rounded-xl';
+    }
+
+    function speakVoice(text) {
+      if (!voiceEnabled || !('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'ms-MY';
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
     }
 
     function showError(msg) {
